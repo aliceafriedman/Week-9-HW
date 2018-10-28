@@ -1,0 +1,168 @@
+---
+title: "NY Times Article Search"
+author: "Alice Friedman, DATA 607"
+date: "October 26, 2018"
+output: 
+  html_document:
+    theme: united
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+---
+
+```{r, include=FALSE}
+Sys.setenv(NYTIMES_KEY="XXXXXXXXXXX")
+```
+
+#Setup
+```{r, message=FALSE, results='hide'}
+library(httr)
+library(jsonlite)
+library(dplyr)
+library(ggplot2)
+```
+This code will not run without first obtaining an API Key from NYT.
+
+Once acquired, save your API key to R using ```Sys.setenv(NYTIMES_KEY="INSERT YOUR KEY HERE")```
+
+Your key can be retrieved without revealing it through the R code by then using ```Sys.getenv("NYTIMES_KEY")```
+
+
+
+#API structure
+
+This API works by taking the base url "http://api.nytimes.com/svc/search/v2/articlesearch.json?q=" and searching based on certain parameters, which include:
+
+- q (query term)
+
+- begin_date (YYYYMMDD format for earliest date to search)
+
+- end_date (YYYYMMDD format for latest date to search)
+
+- fl (list of fields to return)
+
+To search for specific fields for a specific query term or time, we must set parameters and then write a short piece of code which pastes those into a new URL.
+
+##Setting Parameters
+```{r}
+# Need to use + to string together separate words
+q_term <- "dragons" 
+begin_date <- "201701011"
+end_date <- "20180101"
+```
+
+##Assembling the url and making the initial query
+
+First, we paste our parameters together with the API key to develop the URI which will return a JSON response.
+```{r}
+baseurl <- paste0(
+  "http://api.nytimes.com/svc/search/v2/articlesearch.json?q=",
+  q_term,
+  "&begin_date=",
+  begin_date,
+  "&end_date=",
+  end_date,
+  "&facet_filter=true&api-key=",
+  Sys.getenv("NYTIMES_KEY"))
+
+initialQuery <- fromJSON(baseurl)
+```
+
+As we can see, this search returned 31 hits, but only the API returns information about only 10 articles at a time.
+
+#Creating a function
+To make this repeatable over different parameters, we can create a function to allow for a search of different search terms that will also:
+
+- Convert results to a data frame
+
+- Manipulate the search query to automatically download all pages of matching responses
+
+- Merge the different responses into a single data frame. 
+
+For relative simplicity, we will choose just three parameters: search terms, earliest search date, and latest search date, and will limit fields returned to just a few.
+
+Note: This function will still require an API key to function. To set yours, enter your key in the following code:
+
+```Sys.setenv(NYTIMES_KEY="INSERT-YOUR-KEY-HERE")```  
+
+```{r, message=FALSE, results='hide'}
+articleSearch <- function(search_terms, search_from_date, search_to_date) {
+  baseurl <- paste0(
+      "http://api.nytimes.com/svc/search/v2/articlesearch.json?q=",
+      search_terms,
+      "&begin_date=",
+      search_from_date,
+      "&end_date=",
+      search_to_date)
+  initialQuery <- fromJSON(paste0(
+    baseurl, 
+    "&facet_filter=true&api-key=",
+    Sys.getenv("NYTIMES_KEY")))
+  hits <- initialQuery$response$meta$hits
+  numPages <- round((hits/10)-1) 
+  pages <- list()
+#This Sys.sleep is very important--otherwise you will get a 429 error
+  Sys.sleep(1)
+  for(i in 0:numPages){
+      nytSearch <- fromJSON(
+        paste0(
+          baseurl, 
+          "&page=", 
+          i, 
+          "&api-key=",
+          Sys.getenv("NYTIMES_KEY")), 
+        flatten = TRUE) %>% 
+        data.frame() 
+      message("Retrieving page ", i)
+      message(Sys.time())
+      pages[[i+1]] <- nytSearch 
+      #A second Sys.sleep is needed in the for loop
+      Sys.sleep(2)
+  }
+  allNYTSearch <- rbind_pages(pages)
+}
+```
+
+##Running the Function with Different Parameters
+Let's try running the function on a few different dessert trends and checking out some snippets.
+
+```{r}
+Sys.sleep(2)
+cronuts2018 <- articleSearch("cronuts","20180101","20181027")
+cronuts2018$response.docs.snippet[1:3]
+
+Sys.sleep(2)
+cupcakes2018 <- articleSearch("cupcakes","20180101","20181027")
+cupcakes2018$response.docs.snippet[1:3]
+```
+
+#Visualizing the Data
+To visualize the data, we will make a function that takes the search response data frame as an input.
+```{r}
+#Create a function
+sumBarChart <- function(dataframe) {
+  dataframe %>% 
+  group_by(response.docs.type_of_material) %>%
+  summarize(count=n()) %>%
+  ggplot() +
+    geom_bar(aes(y=count, 
+               x=response.docs.type_of_material, 
+               fill=response.docs.type_of_material), 
+           stat = "identity") + 
+    coord_flip() +
+    labs(y="Number of Articles", x="Type of Coverage")+
+    theme(legend.position="none")
+}
+
+sumBarChart(cronuts2018)+ggtitle("NY Times Cronut Coverage, 2018")
+sumBarChart(cupcakes2018)+ggtitle("NY Times Cupcake Coverage, 2018")
+```
+
+Looks like cupcakes were a lot more popular in 2018 than cronuts!
+
+
+#References
+
+The above code is heavily indebted to the work of Jonathan D. Fitzgerald, published on January 25, 2018 on <a href="http://www.storybench.org/" target="_blank"><i>Storybench</i></a>, <a href="http://www.storybench.org/working-with-the-new-york-times-api-in-r/" target="_blank">"Working with The New York Times API in R"</a>
